@@ -49,8 +49,9 @@ void schedule_window(xcb_window_t win)
 
 	if (wa != NULL) {
 		override_redirect = wa->override_redirect;
-		free(wa);
 	}
+
+	free(wa);
 
 	if (override_redirect || locate_window(win, &loc)) {
 		return;
@@ -90,7 +91,7 @@ bool manage_window(xcb_window_t win, rule_consequence_t *csq, int fd)
 	if (!csq->manage) {
 		free(csq->layer);
 		free(csq->state);
-		window_show(win);
+		xcb_map_window(dpy, win);
 		return false;
 	}
 
@@ -199,9 +200,9 @@ bool manage_window(xcb_window_t win, rule_consequence_t *csq, int fd)
 	window_grab_buttons(win);
 
 	if (d == m->desk) {
-		show_node(d, n);
+		show_node(d, n, false);
 	} else {
-		hide_node(d, n);
+		hide_node(d, n, false);
 	}
 
 	ewmh_update_client_list(false);
@@ -325,7 +326,7 @@ void draw_presel_feedback(monitor_t *m, desktop_t *d, node_t *n)
 	                   presel_rect.width, presel_rect.height);
 
 	if (!exists && m->desk == d) {
-		window_show(p->feedback);
+		window_show(p->feedback, false);
 	}
 }
 
@@ -348,7 +349,7 @@ void show_presel_feedbacks(monitor_t *m, desktop_t *d, node_t *n)
 		return;
 	} else {
 		if (n->presel != NULL) {
-			window_show(n->presel->feedback);
+			window_show(n->presel->feedback, false);
 		}
 		show_presel_feedbacks(m, d, n->first_child);
 		show_presel_feedbacks(m, d, n->second_child);
@@ -361,7 +362,7 @@ void hide_presel_feedbacks(monitor_t *m, desktop_t *d, node_t *n)
 		return;
 	} else {
 		if (n->presel != NULL) {
-			window_hide(n->presel->feedback);
+			window_hide(n->presel->feedback, false);
 		}
 		hide_presel_feedbacks(m, d, n->first_child);
 		hide_presel_feedbacks(m, d, n->second_child);
@@ -387,8 +388,8 @@ void update_colors_in(node_t *n, desktop_t *d, monitor_t *m)
 			xcb_change_window_attributes(dpy, n->presel->feedback, XCB_CW_BACK_PIXEL, &pxl);
 			if (d == m->desk) {
 				/* hack to induce back pixel refresh */
-				window_hide(n->presel->feedback);
-				window_show(n->presel->feedback);
+				window_hide(n->presel->feedback, false);
+				window_show(n->presel->feedback, false);
 			}
 		}
 		if (n == d->focus) {
@@ -725,7 +726,7 @@ void apply_size_hints(client_t *c, uint16_t *width, uint16_t *height)
 void query_pointer(xcb_window_t *win, xcb_point_t *pt)
 {
 	if (motion_recorder.enabled) {
-		window_hide(motion_recorder.id);
+		window_hide(motion_recorder.id, false);
 	}
 
 	xcb_query_pointer_reply_t *qpr = xcb_query_pointer_reply(dpy, xcb_query_pointer(dpy, root), NULL);
@@ -769,7 +770,7 @@ void query_pointer(xcb_window_t *win, xcb_point_t *pt)
 	free(qpr);
 
 	if (motion_recorder.enabled) {
-		window_show(motion_recorder.id);
+		window_show(motion_recorder.id, false);
 	}
 }
 
@@ -801,13 +802,14 @@ void update_motion_recorder(void)
 
 void enable_motion_recorder(xcb_window_t win)
 {
+	printf("enable motion recorder\n");
 	xcb_get_geometry_reply_t *geo = xcb_get_geometry_reply(dpy, xcb_get_geometry(dpy, win), NULL);
 	if (geo != NULL) {
 		uint16_t width = geo->width + 2 * geo->border_width;
 		uint16_t height = geo->height + 2 * geo->border_width;
 		window_move_resize(motion_recorder.id, geo->x, geo->y, width, height);
 		window_above(motion_recorder.id, win);
-		window_show(motion_recorder.id);
+		window_show(motion_recorder.id, false);
 		motion_recorder.enabled = true;
 	}
 	free(geo);
@@ -818,11 +820,12 @@ void disable_motion_recorder(void)
 	if (!motion_recorder.enabled) {
 		return;
 	}
-	window_hide(motion_recorder.id);
+	printf("disable motion recorder\n");
+	window_hide(motion_recorder.id, false);
 	motion_recorder.enabled = false;
 }
 
-void window_border_width(xcb_window_t win, uint32_t bw)
+void window_border_width(xcb_window_t win, uint16_t bw)
 {
 	uint32_t values[] = {bw};
 	xcb_configure_window(dpy, win, XCB_CONFIG_WINDOW_BORDER_WIDTH, values);
@@ -844,6 +847,26 @@ void window_move_resize(xcb_window_t win, int16_t x, int16_t y, uint16_t w, uint
 {
 	uint32_t values[] = {x, y, w, h};
 	xcb_configure_window(dpy, win, XCB_CONFIG_WINDOW_X_Y_WIDTH_HEIGHT, values);
+}
+
+void window_mirror(xcb_window_t win)
+{
+	xcb_get_window_attributes_reply_t *wa = xcb_get_window_attributes_reply(dpy, xcb_get_window_attributes(dpy, win), NULL);
+	if (wa != NULL) {
+		printf("0x%08X %u\n", win, wa->map_state);
+	}
+	if (wa != NULL && wa->map_state == XCB_MAP_STATE_UNMAPPED) {
+		free(wa);
+		xcb_map_window(dpy, win);
+		return;
+	}
+	free(wa);
+	xcb_get_geometry_reply_t *geo = xcb_get_geometry_reply(dpy, xcb_get_geometry(dpy, win), NULL);
+	if (geo != NULL) {
+		int16_t x = -(geo->x + (int16_t) geo->width + (int16_t) (2 * geo->border_width));
+		window_move(win, x, geo->y);
+	}
+	free(geo);
 }
 
 void window_center(monitor_t *m, client_t *c)
@@ -892,29 +915,37 @@ void window_lower(xcb_window_t win)
 	xcb_configure_window(dpy, win, XCB_CONFIG_WINDOW_STACK_MODE, values);
 }
 
-void window_set_visibility(xcb_window_t win, bool visible)
+void window_set_visibility(xcb_window_t win, bool visible, bool move)
 {
 	uint32_t values_off[] = {ROOT_EVENT_MASK & ~XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY};
 	uint32_t values_on[] = {ROOT_EVENT_MASK};
 	xcb_change_window_attributes(dpy, root, XCB_CW_EVENT_MASK, values_off);
 	if (visible) {
 		set_window_state(win, XCB_ICCCM_WM_STATE_NORMAL);
-		xcb_map_window(dpy, win);
+		if (move) {
+			window_mirror(win);
+		} else {
+			xcb_map_window(dpy, win);
+		}
 	} else {
-		xcb_unmap_window(dpy, win);
+		if (move) {
+			window_mirror(win);
+		} else {
+			xcb_unmap_window(dpy, win);
+		}
 		set_window_state(win, XCB_ICCCM_WM_STATE_ICONIC);
 	}
 	xcb_change_window_attributes(dpy, root, XCB_CW_EVENT_MASK, values_on);
 }
 
-void window_hide(xcb_window_t win)
+void window_hide(xcb_window_t win, bool move)
 {
-	window_set_visibility(win, false);
+	window_set_visibility(win, false, move);
 }
 
-void window_show(xcb_window_t win)
+void window_show(xcb_window_t win, bool move)
 {
-	window_set_visibility(win, true);
+	window_set_visibility(win, true, move);
 }
 
 void update_input_focus(void)
